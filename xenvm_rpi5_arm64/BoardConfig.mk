@@ -24,6 +24,9 @@ endif
 
 include device/google/trout/trout_arm64/BoardConfig.mk
 
+# RPi5 is Cortex-A76 (override the vsoc_arm64/cuttlefish default of cortex-a53)
+TARGET_CPU_VARIANT := cortex-a76
+
 ifneq ($(TARGET_PREBUILT_MODULES_DIR),)
     KERNEL_MODULES_PATH := $(TARGET_PREBUILT_MODULES_DIR)
     # Load every module present in the prebuilt modules dir (virtio, xen, ...)
