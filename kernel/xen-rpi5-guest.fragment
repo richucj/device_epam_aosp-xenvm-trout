@@ -1,0 +1,51 @@
+# Kernel defconfig fragment for the Android 17 (Trout) Xen **guest (DomU)** on
+# Raspberry Pi 5, targeting **Xen 4.4 stable** (HVM/PVH guest, Zephyr Dom0).
+#
+# Apply this ON TOP OF the existing `kernel/xen-virtual-device` fragments
+# (virtual_device.fragment / virtual_device_core.fragment / xenvm.aarch64.fragment).
+# i.e. append these lines to kernel/xen-virtual-device/xenvm.aarch64.fragment
+# (or pass this file as an extra --fragment to build/kernel).
+#
+# NOTE on Xen 4.4 ABI: CONFIG_XEN on arm64 uses the stable Xen ARM guest ABI.
+# Keep the config conservative for 4.4 — do NOT enable options that require a
+# newer hypervisor (e.g. Xen PVH-only or EFI-guest features). Verify the guest
+# kernel boots against the actual Xen 4.4 build before relying on any optional.
+
+# --- Core Xen guest support (we are a guest, never Dom0) ---
+CONFIG_XEN=y
+CONFIG_XEN_DOM0=n
+CONFIG_XEN_EVENTS=y
+CONFIG_XEN_XENBUS_FRONTEND=y
+
+# --- PV front-ends (talk to Xen backends via xenstore / grant tables) ---
+# Block (Xen VBDs -> /dev/xvda*), network, and the Xen virtual console.
+CONFIG_XEN_BLKDEV_FRONTEND=y
+CONFIG_XEN_NETDEV_FRONTEND=y
+CONFIG_XEN_HVC=y
+CONFIG_XEN_GNTDEV=y
+CONFIG_XEN_GRANT_DEV_ALLOC=y
+CONFIG_XEN_PCIDEV_FRONTEND=y
+
+# --- Virtio (used for GPU/net/console where the backend is virtio) ---
+# The xenvm.aarch64.fragment already sets some of these as =m; these force the
+# guest-critical ones on so they are always present regardless of the base.
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_VSOCKETS=y
+CONFIG_DRM_VIRTIO_GPU=y
+CONFIG_HW_RANDOM_VIRTIO=y
+CONFIG_SND_VIRTIO=y
+CONFIG_VIRTIO_INPUT=y
+
+# --- Optional: virtio over the Xen transport (only if the Dom0 exposes
+#     virtio devices via the Xen virtio backend). Needs matching DTB nodes
+#     (xen-virtio / virtio-mmio). Safe to leave off if using pure PV front-ends.
+# CONFIG_XEN_VIRTIO=y
+# CONFIG_XEN_VIRTIO_MMIO=y
+
+# --- TEE/OP-TEE (kept from xenvm.aarch64.fragment for VHAL/secure side) ---
+CONFIG_TEE=y
+CONFIG_OPTEE=y

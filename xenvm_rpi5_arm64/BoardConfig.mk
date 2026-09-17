@@ -61,10 +61,11 @@ BOARD_BOOTCONFIG += androidboot.hardware.hwcomposer.mode=client
 BOARD_BOOTCONFIG += androidboot.hardware.hwcomposer.display_finder_mode=drm
 
 # TODO (boot integration): must match how Xen presents the Android disk(s)
-# to the guest so /dev/block/by-name/* resolves. For a virtio-blk backend this
-# is typically "virtio" (or the xen vbd, e.g. "xvda"). Adjust to match the
-# by-name links the guest actually sees. See fstab.trout_xenvm.
-BOARD_BOOTCONFIG += androidboot.boot_devices=virtio
+# to the guest so /dev/block/by-name/* resolves. The Zephyr Dom0 serves the
+# Android partitions as Xen VBDs, so the guest block device is "xvda" and the
+# GPT partitions (system/vendor/userdata/...) appear as xvda<N>. Adjust if the
+# DomU config in rpi5.yaml assigns a different VBD name. See fstab.trout_xenvm.
+BOARD_BOOTCONFIG += androidboot.boot_devices=xvda
 
 BOARD_BOOTCONFIG += androidboot.openthread_node_id=1
 
@@ -83,7 +84,9 @@ BOARD_KERNEL_CMDLINE = enforcing=0
 BOARD_KERNEL_CMDLINE += mac80211_hwsim.radios=0
 BOARD_KERNEL_CMDLINE += audit=1
 BOARD_KERNEL_CMDLINE += panic=-1
-BOARD_KERNEL_CMDLINE += 8250.nr_uarts=1
+# Xen 4.4 HVM guest: there is no physical UART exposed to the guest, so the
+# console is the Xen virtual console (hvc0), not a PL011 (8250).
+BOARD_KERNEL_CMDLINE += console=hvc0
 
 BOARD_VENDOR_SEPOLICY_DIRS += device/google/cuttlefish/shared/virgl/sepolicy
 
