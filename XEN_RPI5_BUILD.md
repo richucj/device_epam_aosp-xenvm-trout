@@ -33,9 +33,15 @@ This guide describes how to build and boot **Android 17 (Trout) as a Xen guest
   (`~/Documents/rpi5/meta-xt-prod-devel-rpi5`, based on
   xen-troops/meta-xt-prod-devel-rpi5 issue #71 — adapted to Android 17).
 * **Xen guest kernel**: `kernel/xen-virtual-device` @
-  `common-android17-6.18-xenvm-trout-ih-main` (Linux 6.18 with Xen PV
-  front-ends + virtio). **This is what we need** — it is the Android kernel
-  that runs *inside* the guest as DomU.
+  `common-android17-6.18-xenvm-trout-ih-main` is the Android **`virtual_device`
+  kernel overlay** — defconfig fragments (`xenvm.aarch64.fragment`,
+  `virtual_device_core.fragment`, …) enabling `CONFIG_XEN=y`, virtio-blk/
+  console/vsock, `CONFIG_DRM_VIRTIO_GPU`, plus a `dma_buf_cma_heap` module. It
+  is **not** the kernel source. The actual `Image` is produced by layering
+  these fragments on a base GKI kernel (`kernel/common` @ 6.18) via Android's
+  `build/kernel`, **or** by your separate Xen/Yocto build
+  (`meta-xt-prod-devel-rpi5`), which already builds the guest kernel. You then
+  point `TARGET_PREBUILT_KERNEL` at that `Image`.
 * **Android userspace**: this AOSP tree, target `aosp_xenvm_rpi5_arm64`.
 
 The bare-metal RPi5 kernel (`device/brcm/rpi5-kernel`) is **not** used for the
@@ -54,19 +60,15 @@ Use the `rj/xenBringup` branch of the manifest repo. It:
 * points `aosp-device-xenvm-trout.xml` at `device/epam/aosp-xenvm-trout`
   revision `rj/xenBringup`.
 
-On a machine that tracks the upstream manifest (e.g. this build box) you also
-need the local overlay that removes the two R-Car prebuilt projects so the
-default sync does not try to fetch them:
+The `rj/xenBringup` manifest **already excludes** `proprietary.xml` (the R-Car /
+Imagination prebuilts), so `repo sync` works without the partnergitlab
+credentials and **no local `remove-project` overlay is needed** — adding one
+would actually break sync, because those projects are no longer in the merged
+manifest.
 
-```bash
-cat > .repo/local_manifests/remove-rcar.xml <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<manifest>
-  <remove-project name="x5h-fusion-poc/gen5-prebuilts" />
-  <remove-project name="x5h-fusion-poc/ddk-um-bin" />
-</manifest>
-EOF
-```
+> If you instead `repo init` against the upstream `android-17-xenvm-trout-ih-main`
+> manifest, the R-Car prebuilts *are* included and `repo sync` fails on their
+> auth — that is precisely why this `rj/xenBringup` branch exists.
 
 Then sync:
 
@@ -85,40 +87,53 @@ repo sync -j$(nproc)
 
 ---
 
-## 2. Build the Xen 6.18 guest kernel + modules + guest DTB
+## 2. The guest kernel — what `kernel/xen-virtual-device` actually is
 
-The guest kernel lives in `kernel/xen-virtual-device` (branch
-`common-android17-6.18-xenvm-trout-ih-main`). Build it for arm64 with the
-bcm2712 **guest** config (a Xen guest DTB for bcm2712, e.g.
-`bcm2712-rpi-5-xen.dtb` style — see your Xen/Yocto tree which already ships a
-guest DTB).
+`kernel/xen-virtual-device` (branch `common-android17-6.18-xenvm-trout-ih-main`)
+is **not** the Linux kernel source. It is the Android **`virtual_device` kernel
+overlay**: defconfig fragments (`virtual_device.fragment`,
+`virtual_device_core.fragment`, `xenvm.aarch64.fragment`, …) that enable Xen PV
+front-ends (`CONFIG_XEN=y`, gntdev, grant-alloc), virtio-blk/console/vsock/pci,
+`CONFIG_DRM_VIRTIO_GPU`, and a small `dma_buf_cma_heap` module. The actual
+`Image` is produced by **layering these fragments on a base GKI kernel**.
+
+There are two ways to get the guest `Image` + modules + bcm2712 guest DTB:
+
+**Option A — built by your separate Xen/Yocto build (recommended for the POC).**
+Your `meta-xt-prod-devel-rpi5` tree already builds the Xen guest kernel (it
+consumes these exact fragments). Take the `Image` it produces, the bcm2712
+**guest** DTB (e.g. `bcm2712-rpi-5-xen.dtb` shipped by that tree), and the
+built `*.ko`, and point `TARGET_PREBUILT_KERNEL` / `TARGET_PREBUILT_MODULES_DIR`
+at them (Section 3). No kernel build happens in this AOSP tree.
+
+**Option B — build in this AOSP tree.** This needs the base GKI kernel source
+and Android's kernel build tooling, which are **not** in the `rj/xenBringup`
+manifest yet:
+
+* add `kernel/common` @ the matching `android17-6.18` branch and `build/kernel`
+  to the manifest,
+* then build the `virtual_device` (xenvm) target, e.g.:
 
 ```bash
-cd kernel/xen-virtual-device
-export ARCH=arm64
-export CROSS_COMPILE=aarch64-linux-android-
-
-# Use the in-tree Xen guest defconfig / your Yocto-provided config
-make common-android17-6.18-xenvm-trout_defconfig   # or your guest config
-make -j$(nproc) Image modules dtbs
-
-# Install modules to a staging dir
-export MOD_STAGING=$PWD/../xen-guest-modules
-make INSTALL_MOD_PATH=$MOD_STAGING modules_install
+# from this AOSP root, using build/kernel (adjust target name to your version)
+tools/bazel run //common:kernel_xenvm_dist -- --arch=arm64
+# or the legacy path:
+cd build/kernel && ./build.sh --target=xenvm --arch=arm64
 ```
 
-You need three artifacts for the Android build:
+(The `xenvm.aarch64.fragment` is what selects the Xen guest config.)
+
+Required artifacts (from either option):
 
 | Artifact | Used for |
 |----------|----------|
-| `arch/arm64/boot/Image` | `TARGET_PREBUILT_KERNEL` |
-| `arch/arm64/boot/dts/broadcom/bcm2712-rpi-5-xen.dtb` (guest DTB) | packaged into boot/vendor_boot or passed by Xen |
-| `$MOD_STAGING/lib/modules/<ver>/` | `TARGET_PREBUILT_MODULES_DIR` |
+| `Image` (arm64) | `TARGET_PREBUILT_KERNEL` |
+| bcm2712 guest DTB (`bcm2712-rpi-5-xen.dtb`) | packaged into boot/vendor_boot or passed by Xen |
+| `lib/modules/<ver>/` (the `*.ko`) | `TARGET_PREBUILT_MODULES_DIR` |
 
-Make sure the kernel enables (as modules or built-in): `CONFIG_XEN_*`,
-`CONFIG_VIRTIO_*`, `CONFIG_DRM_VIRTIO_GPU`, `CONFIG_VSOCK`, and the virtio
-block/net front-ends — these are already enabled in the
-`common-android17-6.18-xenvm-trout-ih-main` branch.
+The Xen/virtio options above (`CONFIG_XEN_*`, `CONFIG_VIRTIO_*`,
+`CONFIG_DRM_VIRTIO_GPU`, `CONFIG_VSOCK`, virtio block/net front-ends) come from
+the `xenvm.aarch64.fragment` / `virtual_device_core.fragment` in this overlay.
 
 ---
 
@@ -133,8 +148,8 @@ loads every `*.ko` found in that dir.
 ```bash
 cd <aosp-root>
 source build/envsetup.sh
-export TARGET_PREBUILT_KERNEL=$PWD/kernel/xen-virtual-device/arch/arm64/boot/Image
-export TARGET_PREBUILT_MODULES_DIR=$PWD/kernel/xen-guest-modules/lib/modules/$(ls $PWD/kernel/xen-guest-modules/lib/modules)
+export TARGET_PREBUILT_KERNEL=/path/to/xen-guest/Image      # from Option A or B above
+export TARGET_PREBUILT_MODULES_DIR=/path/to/xen-guest/lib/modules/$(ls /path/to/xen-guest/lib/modules)
 
 lunch aosp_xenvm_rpi5_arm64-trunk_staging-userdebug
 make -j$(nproc)
